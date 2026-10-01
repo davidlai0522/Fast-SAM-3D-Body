@@ -183,7 +183,12 @@ def step2_convert_tensorrt(batch_sizes=[1, 2, 4]):
 
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    # TensorRT >=10 dropped NetworkDefinitionCreationFlag.EXPLICIT_BATCH (explicit batch is
+    # the only supported mode now, no flag needed).
+    if hasattr(trt.NetworkDefinitionCreationFlag, 'EXPLICIT_BATCH'):
+        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    else:
+        network = builder.create_network()
     parser = trt.OnnxParser(network, logger)
 
     # Parse ONNX (use parse_from_file for external data support)
@@ -212,7 +217,10 @@ def step2_convert_tensorrt(batch_sizes=[1, 2, 4]):
 
     # Use FP16 precision for internal compute and I/O
     # (FP16 is better optimized in TensorRT than BF16)
-    config.set_flag(trt.BuilderFlag.FP16)
+    # TensorRT >=10 dropped BuilderFlag.FP16 -- precision is now inferred from the ONNX
+    # graph's own tensor dtypes.
+    if hasattr(trt.BuilderFlag, 'FP16'):
+        config.set_flag(trt.BuilderFlag.FP16)
 
     # Set input/output layers to use FP16
     for i in range(network.num_inputs):

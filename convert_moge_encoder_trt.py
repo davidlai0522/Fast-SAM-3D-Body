@@ -161,21 +161,30 @@ def convert_trt():
     # Create builder
     logger = trt.Logger(trt.Logger.INFO)
     builder = trt.Builder(logger)
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    # TensorRT >=10 dropped NetworkDefinitionCreationFlag.EXPLICIT_BATCH (explicit batch is
+    # the only supported mode now, no flag needed).
+    if hasattr(trt.NetworkDefinitionCreationFlag, 'EXPLICIT_BATCH'):
+        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    else:
+        network = builder.create_network()
     parser = trt.OnnxParser(network, logger)
 
-    # Parse ONNX
+    # Parse ONNX. Use parse_from_file (not parse(bytes)) so the parser can resolve the
+    # external-data weights file (moge_dinov2_encoder.onnx.data) next to the model --
+    # parse(bytes) has no path context and looks for it relative to the cwd instead.
     print(f"Parsing ONNX: {ONNX_PATH}")
-    with open(ONNX_PATH, "rb") as f:
-        if not parser.parse(f.read()):
-            for error in range(parser.num_errors):
-                print(f"ONNX parsing error: {parser.get_error(error)}")
-            return
+    if not parser.parse_from_file(ONNX_PATH):
+        for error in range(parser.num_errors):
+            print(f"ONNX parsing error: {parser.get_error(error)}")
+        return
 
     # Configure builder
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)  # 4GB
-    config.set_flag(trt.BuilderFlag.FP16)  # Enable FP16
+    # TensorRT >=10 dropped BuilderFlag.FP16 -- precision is now inferred from the ONNX
+    # graph's own tensor dtypes (already FP16 here since the model was exported in .half()).
+    if hasattr(trt.BuilderFlag, 'FP16'):
+        config.set_flag(trt.BuilderFlag.FP16)
 
     # Build engine
     print("Building TensorRT engine (this may take a few minutes)...")
