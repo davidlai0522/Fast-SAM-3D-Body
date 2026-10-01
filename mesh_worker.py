@@ -20,6 +20,7 @@ import os
 import sys
 
 import numpy as np
+import torch
 
 # Redirect the process's real stdout (the pipe back to the parent) to a private fd, then
 # alias fd 1 (stdout) to fd 2 (stderr) so every other print/log in this process -- ours or
@@ -48,6 +49,11 @@ def main():
     parser.add_argument('--detector_model', default='./checkpoints/yolo/yolo11n.pt')
     parser.add_argument('--local_checkpoint', default='./checkpoints/sam-3d-body-dinov3')
     parser.add_argument('--hand_box_source', default='body_decoder')
+    parser.add_argument(
+        '--cam_int', default='',
+        help="Known camera intrinsics 'fx,fy,cx,cy'. If set, MoGe2 FOV estimator is not "
+             "loaded (saves GPU memory) and these intrinsics are used for every image.",
+    )
     args = parser.parse_args()
 
     estimator = setup_sam_3d_body(
@@ -55,7 +61,12 @@ def main():
         detector_name='yolo',
         detector_model=args.detector_model,
         local_checkpoint_path=args.local_checkpoint,
+        fov_name='' if args.cam_int else 'moge2',
     )
+    cam_int = None
+    if args.cam_int:
+        fx, fy, cx, cy = (float(v) for v in args.cam_int.split(','))
+        cam_int = torch.tensor([[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]])
     send({'ready': True})
 
     for line in sys.stdin:
@@ -70,7 +81,7 @@ def main():
 
             img_cv2 = cv2.imread(image_path)
             outputs = estimator.process_one_image(
-                image_path, hand_box_source=args.hand_box_source,
+                image_path, cam_int=cam_int, hand_box_source=args.hand_box_source,
             )
             if not outputs:
                 send({'mesh_path': None})
