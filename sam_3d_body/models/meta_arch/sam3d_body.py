@@ -2267,7 +2267,7 @@ class SAM3DBody(BaseModel):
                 torch.meshgrid(torch.arange(H), torch.arange(W), indexing="xy"), dim=2
             )[None, None, :, :, :]
             .repeat(B, N, 1, 1, 1)
-            .cuda()
+            .to(batch["img"].device)
         )  # B x N x H x W x 2
         meshgrid_xy = (
             meshgrid_xy / batch["affine_trans"][:, :, None, None, [0, 1], [0, 1]]
@@ -2645,7 +2645,7 @@ class SAM3DBody(BaseModel):
                     img, left_xyxy, right_xyxy, cam_int,
                     output_size=output_size,
                     padding=0.9,  # Consistent with GetBBoxCenterScale(padding=0.9)
-                    device='cuda'
+                    device=self.device
                 )
             else:
                 # CPU version (fallback)
@@ -2658,12 +2658,12 @@ class SAM3DBody(BaseModel):
                 batch_lhand = prepare_batch(
                     flipped_img, transform_hand, left_xyxy_flipped, cam_int=cam_int.clone()
                 )
-                batch_lhand = recursive_to(batch_lhand, "cuda")
+                batch_lhand = recursive_to(batch_lhand, self.device)
 
                 batch_rhand = prepare_batch(
                     img, transform_hand, right_xyxy, cam_int=cam_int.clone()
                 )
-                batch_rhand = recursive_to(batch_rhand, "cuda")
+                batch_rhand = recursive_to(batch_rhand, self.device)
 
             # Debug: save cropped images for comparison
             if _DEBUG_HAND_PREP:
@@ -2807,13 +2807,13 @@ class SAM3DBody(BaseModel):
             batch_lhand = prepare_batch(
                 flipped_img, transform_hand, left_xyxy, cam_int=cam_int.clone()
             )
-            batch_lhand = recursive_to(batch_lhand, "cuda")
+            batch_lhand = recursive_to(batch_lhand, self.device)
 
             ## Prepare right hand batch
             batch_rhand = prepare_batch(
                 img, transform_hand, right_xyxy, cam_int=cam_int.clone()
             )
-            batch_rhand = recursive_to(batch_rhand, "cuda")
+            batch_rhand = recursive_to(batch_rhand, self.device)
 
             ## Merge both hand batches and run single forward pass
             batch_hands = self._merge_hand_batches(batch_lhand, batch_rhand)
@@ -2879,8 +2879,8 @@ class SAM3DBody(BaseModel):
         ### Get lowarm
         # Optimization: use pre-cached indices (avoid creating new tensors each time)
         if not hasattr(self, '_lowarm_joint_idxs'):
-            self._lowarm_joint_idxs = torch.LongTensor([76, 40]).cuda()
-            self._wrist_twist_joint_idxs = torch.LongTensor([77, 41]).cuda()
+            self._lowarm_joint_idxs = torch.LongTensor([76, 40]).to(joint_rotations.device)
+            self._wrist_twist_joint_idxs = torch.LongTensor([77, 41]).to(joint_rotations.device)
         lowarm_joint_idxs = self._lowarm_joint_idxs
         lowarm_joint_rotations = joint_rotations[:, lowarm_joint_idxs]  # B x 2 x 3 x 3
         ### Get zero-wrist pose

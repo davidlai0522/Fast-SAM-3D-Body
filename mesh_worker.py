@@ -85,7 +85,13 @@ def main():
              'camera mounted on its side sees people upright; outputs are rotated back into '
              'the original camera frame.',
     )
+    parser.add_argument('--device', default='cuda', choices=['cuda', 'cpu'])
     args = parser.parse_args()
+
+    if args.device == 'cpu':
+        # The model code calls torch.cuda.synchronize() unguarded (for its timing prints),
+        # which raises without a GPU. Nothing runs on CUDA here, so make it a no-op.
+        torch.cuda.synchronize = lambda *a, **k: None
 
     estimator = setup_sam_3d_body(
         hf_repo_id=args.model,
@@ -93,6 +99,7 @@ def main():
         detector_model=args.detector_model,
         local_checkpoint_path=args.local_checkpoint,
         fov_name='' if args.cam_int else 'moge2',
+        device=args.device,
     )
     cam_int = None
     if args.cam_int:

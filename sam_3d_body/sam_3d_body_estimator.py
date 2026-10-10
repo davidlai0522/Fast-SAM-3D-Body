@@ -325,7 +325,7 @@ class SAM3DBodyEstimator:
 
         #################### Run model inference on an image ####################
         t0 = time.time()
-        batch = recursive_to(batch, "cuda")
+        batch = recursive_to(batch, self.device)
         self.model._initialize_batch(batch)
         print(f"        [process_one_image] initialize_batch: {time.time() - t0:.4f}s")
 
