@@ -42,6 +42,31 @@ import cv2  # noqa: E402
 
 from notebook.utils import save_mesh_results, setup_sam_3d_body  # noqa: E402
 
+# --rotate_deg -> cv2.rotate code that turns the camera image upright (+90 = counterclockwise).
+_CV2_ROTATE = {90: cv2.ROTATE_90_COUNTERCLOCKWISE, -90: cv2.ROTATE_90_CLOCKWISE}
+# --rotate_deg -> 3x3 that maps a point from the upright (rotated) image's camera frame back to
+# the real camera's frame (OpenCV axes: x right, y down, z forward). Rotating the image by 90
+# deg is the same as rolling the camera 90 deg about its optical axis.
+_UNROTATE_POINTS = {
+    90: np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+    -90: np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+}
+
+
+def rotate_cam_int(fx, fy, cx, cy, width, height, rotate_deg):
+    """Intrinsics of the width x height image after cv2.rotate by rotate_deg."""
+    if rotate_deg == 90:   # (u, v) -> (v, width-1-u)
+        return fy, fx, cy, width - 1 - cx
+    return fy, fx, height - 1 - cy, cx  # -90: (u, v) -> (height-1-v, u)
+
+
+def unrotate_bbox(bbox, width, height, rotate_deg):
+    """Map an x1,y1,x2,y2 box from the rotated image back to the width x height original."""
+    x1, y1, x2, y2 = bbox
+    if rotate_deg == 90:
+        return np.array([width - 1 - y2, x1, width - 1 - y1, x2])
+    return np.array([y1, height - 1 - x2, y2, height - 1 - x1])
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -53,6 +78,12 @@ def main():
         '--cam_int', default='',
         help="Known camera intrinsics 'fx,fy,cx,cy'. If set, MoGe2 FOV estimator is not "
              "loaded (saves GPU memory) and these intrinsics are used for every image.",
+    )
+    parser.add_argument(
+        '--rotate_deg', type=int, default=0, choices=[0, 90, -90],
+        help='Rotate each image by this much (+ = counterclockwise) before detection, so a '
+             'camera mounted on its side sees people upright; outputs are rotated back into '
+             'the original camera frame.',
     )
     args = parser.parse_args()
 
@@ -66,6 +97,7 @@ def main():
     cam_int = None
     if args.cam_int:
         fx, fy, cx, cy = (float(v) for v in args.cam_int.split(','))
+        cam_int_raw = (fx, fy, cx, cy)
         cam_int = torch.tensor([[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]])
     send({'ready': True})
 
@@ -80,9 +112,28 @@ def main():
             image_name = request.get('image_name', 'frame')
 
             img_cv2 = cv2.imread(image_path)
+            if args.rotate_deg:
+                height, width = img_cv2.shape[:2]
+                img_input = cv2.cvtColor(
+                    cv2.rotate(img_cv2, _CV2_ROTATE[args.rotate_deg]), cv2.COLOR_BGR2RGB,
+                )
+                img_cam_int = cam_int
+                if cam_int is not None:
+                    fx, fy, cx, cy = rotate_cam_int(*cam_int_raw, width, height, args.rotate_deg)
+                    img_cam_int = torch.tensor(
+                        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]]
+                    )
+            else:
+                img_input, img_cam_int = image_path, cam_int
             outputs = estimator.process_one_image(
-                image_path, cam_int=cam_int, hand_box_source=args.hand_box_source,
+                img_input, cam_int=img_cam_int, hand_box_source=args.hand_box_source,
             )
+            if args.rotate_deg:
+                unrotate = _UNROTATE_POINTS[args.rotate_deg]
+                for o in outputs:
+                    o['pred_vertices'] = o['pred_vertices'] @ unrotate.T
+                    o['pred_cam_t'] = o['pred_cam_t'] @ unrotate.T
+                    o['bbox'] = unrotate_bbox(o['bbox'], width, height, args.rotate_deg)
             if not outputs:
                 send({'mesh_path': None})
                 continue
